@@ -5756,6 +5756,9 @@ document.addEventListener('DOMContentLoaded', function () {
   var CORE_AI_LOTTERY_NAME = <?php echo json_encode((string) $lotteryName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
   var REQUIRED_MAIN_COUNT = <?php echo (int) $pickSize; ?>;
   var AUTO_SAVE_DELAY_MS = 700;
+  var SEQUENTIAL_SAVE_DELAY_MS = 150;
+  var SAVE_RESPONSE_TIMEOUT_MS = 25000;
+  var BATCH_TOTAL_SAVE_TARGET = 9;
   var batchResults = [];
   var batchRunning = false;
   var batchStopped = false;
@@ -5887,6 +5890,10 @@ document.addEventListener('DOMContentLoaded', function () {
       var inp = qs("skai-strategy") || qs("skai-ai-strategy");
       if (inp) { inp.value = strategy; }
     } catch (_) {}
+  }
+
+  function allBatchRunsComplete() {
+    return batchDoneCount >= BATCH_COMBOS.length;
   }
 
   function captureResult() {
@@ -6325,10 +6332,10 @@ document.addEventListener('DOMContentLoaded', function () {
     setCurrentLabel(batchStopped ? "Batch stopped." : "All runs complete.");
     try { console.log("[SKAI batch] onBatchEnd: " + batchDoneCount + "/" + BATCH_COMBOS.length + " combos done, stopped=" + batchStopped); } catch (_) {}
     var saveRow = qs("skai-batch-save-row");
-    if (saveRow && !batchStopped && batchDoneCount >= BATCH_COMBOS.length) {
+    if (saveRow && !batchStopped && allBatchRunsComplete()) {
       saveRow.style.display = "flex";
     }
-    if (!batchStopped && batchDoneCount >= BATCH_COMBOS.length) {
+    if (!batchStopped && allBatchRunsComplete()) {
       setBatchSaveNote("Batch complete. Click Save All 9 to save every completed result, or Save Selected to choose specific runs.", "success");
     }
     var stopBtn = qs("skai-batch-stop");
@@ -6622,7 +6629,7 @@ document.addEventListener('DOMContentLoaded', function () {
     setFieldValueIfPresent("saveBatchType", "core_ai_9_batch_precision_lock");
     setFieldValueIfPresent("saveBatchUuid", coreAiBatchUuid());
     setFieldValueIfPresent("saveBatchIndex", String(index + 1));
-    setFieldValueIfPresent("saveBatchTotal", "9");
+    setFieldValueIfPresent("saveBatchTotal", String(BATCH_TOTAL_SAVE_TARGET));
     setFieldValueIfPresent("saveRunUuid", "");
     setFieldValueIfPresent("saveClientResultHash", "");
 
@@ -6717,7 +6724,7 @@ document.addEventListener('DOMContentLoaded', function () {
       window.addEventListener("skai:save:ajax:complete", onAjaxDone, false);
       timer = setTimeout(function () {
         finish({ ok: false, parsed: null, message: "Timed out waiting for save response." });
-      }, 25000);
+      }, SAVE_RESPONSE_TIMEOUT_MS);
 
       try {
         var ev;
@@ -6731,7 +6738,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function saveAllSequential(indices, doneCallback) {
-    if (batchDoneCount < BATCH_COMBOS.length) {
+    if (!allBatchRunsComplete()) {
       if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Please wait for all runs to finish before saving the batch.", "error"); }
       return;
     }
@@ -6838,7 +6845,7 @@ document.addEventListener('DOMContentLoaded', function () {
         persistResults();
         try { console.log("[SKAI batch save] response", { success: ok, message: msg }); } catch (_) {}
         saveCursor += 1;
-        setTimeout(step, 150);
+        setTimeout(step, SEQUENTIAL_SAVE_DELAY_MS);
       }).catch(function (err) {
         var errMsg = (err && err.message) ? err.message : "Save failed.";
         r.saved = false;
@@ -6848,7 +6855,7 @@ document.addEventListener('DOMContentLoaded', function () {
         persistResults();
         try { console.log("[SKAI batch save] response", { success: false, message: errMsg }); } catch (_) {}
         saveCursor += 1;
-        setTimeout(step, 150);
+        setTimeout(step, SEQUENTIAL_SAVE_DELAY_MS);
       });
     }
 
