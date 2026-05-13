@@ -5898,6 +5898,20 @@ document.addEventListener('DOMContentLoaded', function () {
     return batchDoneCount >= BATCH_COMBOS.length;
   }
 
+  function isValidMainNumberArray(numbers, requiredCount) {
+    if (!Array.isArray(numbers) || numbers.length < requiredCount) {
+      return false;
+    }
+    for (var i = 0; i < numbers.length; i++) {
+      var n = numbers[i];
+      if (typeof n !== "number") { n = parseInt(n, 10); }
+      if (!isFinite(n) || n <= 0 || Math.floor(n) !== n) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function captureResult() {
     try {
       var containers = [
@@ -6264,7 +6278,11 @@ document.addEventListener('DOMContentLoaded', function () {
       mainNums = coreAiRecoverMainNumbersForSave(mainNums);
       extraNums = coreAiRecoverExtraNumbersForSave(extraNums);
 
-      var hasValidNumbers = mainNums.length >= REQUIRED_MAIN_COUNT;
+      var requiredMainForCompletion = Math.max(
+        REQUIRED_MAIN_COUNT || 0,
+        (typeof pickSize !== "undefined" ? parseInt(pickSize, 10) || 0 : 0)
+      );
+      var hasValidNumbers = isValidMainNumberArray(mainNums, requiredMainForCompletion);
 
       /*
        * v15 restore: wait-until-finished, then user saves.
@@ -6610,7 +6628,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var mainNums = Array.isArray(result.mainNumbers) ? result.mainNumbers.slice() : [];
     var extraNums = Array.isArray(result.extraNumbers) ? result.extraNumbers.slice() : [];
     var effectiveMainRequired = Math.max(REQUIRED_MAIN_COUNT || 0, (typeof pickSize !== "undefined" ? parseInt(pickSize, 10) || 0 : 0));
-    if (!mainNums.length || mainNums.length < effectiveMainRequired) { return false; }
+    if (!isValidMainNumberArray(mainNums, effectiveMainRequired)) { return false; }
 
     window.skaiSaveMainOrdered = mainNums.slice();
     window.skaiSaveExtraOrdered = extraNums.slice();
@@ -6663,15 +6681,24 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!formData.get("main_numbers")) {
       formData.set("main_numbers", firstValueByIds(["saveMainNumbers"], ""));
     }
-    var body = new URLSearchParams();
-    formData.forEach(function (value, key) {
-      body.append(key, value == null ? "" : String(value));
-    });
+    try {
+      console.log("SAVE CHECK", {
+        index: (window.coreAiActiveSaveIndex != null ? window.coreAiActiveSaveIndex : -1),
+        main_numbers: formData.get("main_numbers"),
+        extra_ball_numbers: formData.get("extra_ball_numbers"),
+        save_set: formData.get("save_set"),
+        lottery_id: formData.get("lottery_id"),
+        run_uuid: formData.get("run_uuid"),
+        client_result_hash: formData.get("client_result_hash"),
+        batch_uuid: formData.get("batch_uuid"),
+        batch_index: formData.get("batch_index")
+      });
+    } catch (_) {}
     return fetch(form.getAttribute("action") || window.location.href.split("#")[0], {
       method: "POST",
       headers: { "X-Requested-With": "XMLHttpRequest" },
       credentials: "same-origin",
-      body: body
+      body: formData
     }).then(function (resp) {
       return resp.text().then(function (text) {
         var parsed = null;
@@ -6700,6 +6727,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
 
       if (!form.__skaiSaveIntercepted) {
+        try { window.coreAiActiveSaveIndex = (window.coreAiActiveSaveIndex != null ? window.coreAiActiveSaveIndex : -1); } catch (_) {}
         submitSaveViaFetch(form).then(resolve);
         return;
       }
@@ -6763,7 +6791,7 @@ document.addEventListener('DOMContentLoaded', function () {
       var idx = queue[i];
       var r = batchResults[idx];
       if (!r || !r.done || r.saved) { continue; }
-      if (!Array.isArray(r.mainNumbers) || r.mainNumbers.length < requiredMain) {
+      if (!isValidMainNumberArray(r.mainNumbers, requiredMain)) {
         setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Needs review", "#b45309", true), "warning");
         continue;
       }
@@ -6786,6 +6814,7 @@ document.addEventListener('DOMContentLoaded', function () {
       var idx = eligible[saveCursor];
       var r = batchResults[idx];
       if (!r) { saveCursor += 1; step(); return; }
+      try { window.coreAiActiveSaveIndex = idx; } catch (_) {}
 
       try { selectProfile(r.combo.profile); } catch (_) {}
       try { selectStrategy(r.combo.strategy); } catch (_) {}
@@ -6842,7 +6871,7 @@ document.addEventListener('DOMContentLoaded', function () {
           r.saved = false;
           r.saveError = msg;
           renderCompletedCell(idx, false, msg);
-          setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Save failed: " + msg, "#dc2626", true), "error");
+          setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, msg, "#dc2626", true), "error");
         }
         persistResults();
         try { console.log("[SKAI batch save] response", { success: ok, message: msg }); } catch (_) {}
@@ -6853,7 +6882,7 @@ document.addEventListener('DOMContentLoaded', function () {
         r.saved = false;
         r.saveError = errMsg;
         renderCompletedCell(idx, false, errMsg);
-        setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Save failed: " + errMsg, "#dc2626", true), "error");
+        setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, errMsg, "#dc2626", true), "error");
         persistResults();
         try { console.log("[SKAI batch save] response", { success: false, message: errMsg }); } catch (_) {}
         saveCursor += 1;
