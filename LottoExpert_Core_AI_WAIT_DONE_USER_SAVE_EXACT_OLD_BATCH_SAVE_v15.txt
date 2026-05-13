@@ -1276,6 +1276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_set'])) {
     $postedBatchTypeForIntegrity = leCleanTechnicalKey((string) ($_POST['batch_type'] ?? ''), 64);
     $isCoreAiBatchSave = in_array($postedBatchTypeForIntegrity, [
         'core_ai_precision_lock_9_batch',
+        'core_ai_9_batch_precision_lock',
         'core_ai_range_test_9_batch',
         'core_ai_precision_lock_batch',
         'core_ai_batch',
@@ -5550,6 +5551,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var batchTypeEl = form.querySelector("[name='batch_type']");
         var batchTypeVal = batchTypeEl ? String(batchTypeEl.value || '') : '';
         var isBatchSave = batchTypeVal === 'core_ai_precision_lock_9_batch' ||
+                          batchTypeVal === 'core_ai_9_batch_precision_lock' ||
                           batchTypeVal === 'core_ai_range_test_9_batch'     ||
                           batchTypeVal === 'core_ai_batch'                  ||
                           batchTypeVal === 'core_ai_precision_lock_batch';
