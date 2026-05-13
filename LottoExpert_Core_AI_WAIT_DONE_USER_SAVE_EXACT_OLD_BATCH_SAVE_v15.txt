@@ -2639,7 +2639,7 @@ foreach ($extraFieldNames as $col) {
     [[div id="skai-batch-progress-text" style="font-size:.88rem;color:#374151;margin-bottom:4px;"]]Completed 0 of 9[[/div]]
     [[div id="skai-batch-current-label" style="font-size:.82rem;color:var(--skai-slate);margin-bottom:10px;"]]Ready[[/div]]
     [[div id="skai-batch-save-note" style="font-size:.82rem;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:12px;"]]
-      [[strong]]While running:[[/strong]] Just wait. When all runs finish, a [[strong]]Save All 9[[/strong]] button appears automatically.
+      [[strong]]While running:[[/strong]] Just wait. When all runs finish, [[strong]]Save All 9[[/strong]] appears automatically.
     [[/div]]
     [[div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;"]]
       [[button type="button" id="skai-batch-stop" class="btn-outline" style="font-size:.82rem;padding:5px 12px;color:#dc2626;border-color:#dc2626;"]]Stop Batch[[/button]]
@@ -5753,6 +5753,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var CORE_AI_HANDOFF_BATCH = !!(BATCH_COMBOS.length && BATCH_COMBOS[0] && BATCH_COMBOS[0].handoff);
 
   var STORAGE_KEY = "skai_batch_results_v1";
+  var CORE_AI_LOTTERY_NAME = <?php echo json_encode((string) $lotteryName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
   var REQUIRED_MAIN_COUNT = <?php echo (int) $pickSize; ?>;
   var AUTO_SAVE_DELAY_MS = 700;
   var batchResults = [];
@@ -6281,7 +6282,25 @@ document.addEventListener('DOMContentLoaded', function () {
         savedId: 0,
         saveError: "",
         mainNumbers: mainNums,
-        extraNumbers: extraNums
+        extraNumbers: extraNums,
+        generatedAt: (function () {
+          var f = document.getElementById("saveGeneratedAt");
+          return f && f.value ? String(f.value) : "";
+        })(),
+        settings: {
+          epochs: (function () { var f = document.getElementById("saveEpochs") || document.getElementById("epochs") || document.getElementById("skaiadv_epochs"); return f && f.value ? String(f.value) : ""; })(),
+          batchSize: (function () { var f = document.getElementById("saveBatchSize") || document.getElementById("batchSize") || document.getElementById("skaiadv_batch"); return f && f.value ? String(f.value) : ""; })(),
+          dropoutRate: (function () { var f = document.getElementById("saveDropoutRate") || document.getElementById("dropoutRate") || document.getElementById("skaiadv_dropout"); return f && f.value ? String(f.value) : ""; })(),
+          learningRate: (function () { var f = document.getElementById("saveLearningRate") || document.getElementById("learningRate") || document.getElementById("skaiadv_lr"); return f && f.value ? String(f.value) : ""; })(),
+          activationFunction: (function () { var f = document.getElementById("saveActivationFunction") || document.getElementById("activationFunction") || document.getElementById("skaiadv_activation"); return f && f.value ? String(f.value) : ""; })(),
+          hiddenLayers: (function () { var f = document.getElementById("saveHiddenLayers") || document.getElementById("hiddenLayers") || document.getElementById("skaiadv_layers"); return f && f.value ? String(f.value) : ""; })(),
+          recencyDecay: (function () { var f = document.getElementById("saveRecencyDecay") || document.getElementById("recencyDecay") || document.getElementById("skaiadv_recency_decay"); return f && f.value ? String(f.value) : ""; })()
+        },
+        settingsJson: (function () { var f = document.getElementById("saveSettingsJson"); return f && f.value ? String(f.value) : ""; })(),
+        rankedMainNumbersJson: (function () { var f = document.getElementById("saveRankedMainNumbersJson"); return f && f.value ? String(f.value) : ""; })(),
+        rankedExtraNumbersJson: (function () { var f = document.getElementById("saveRankedExtraNumbersJson"); return f && f.value ? String(f.value) : ""; })(),
+        mainDisplayJson: (function () { var f = document.getElementById("saveMainDisplayJson"); return f && f.value ? String(f.value) : ""; })(),
+        extraDisplayJson: (function () { var f = document.getElementById("saveExtraDisplayJson"); return f && f.value ? String(f.value) : ""; })()
       };
 
       persistResults();
@@ -6293,7 +6312,7 @@ document.addEventListener('DOMContentLoaded', function () {
         setCell(combo.profile, combo.strategy, buildBatchCellNode(idx, "Complete", "#16a34a", true), "done");
         setCurrentLabel(combo.label + " complete. Continuing batch...");
       } else {
-        setCell(combo.profile, combo.strategy, "Complete - save check needed", "warning");
+        setCell(combo.profile, combo.strategy, buildBatchCellNode(idx, "Needs review", "#b45309", true), "warning");
         setCurrentLabel(combo.label + " finished, but Core AI did not expose numbers to the batch snapshot. Continuing...");
       }
 
@@ -6306,7 +6325,7 @@ document.addEventListener('DOMContentLoaded', function () {
     setCurrentLabel(batchStopped ? "Batch stopped." : "All runs complete.");
     try { console.log("[SKAI batch] onBatchEnd: " + batchDoneCount + "/" + BATCH_COMBOS.length + " combos done, stopped=" + batchStopped); } catch (_) {}
     var saveRow = qs("skai-batch-save-row");
-    if (saveRow && batchDoneCount > 0 && (batchStopped || batchDoneCount >= BATCH_COMBOS.length)) {
+    if (saveRow && !batchStopped && batchDoneCount >= BATCH_COMBOS.length) {
       saveRow.style.display = "flex";
     }
     if (!batchStopped && batchDoneCount >= BATCH_COMBOS.length) {
@@ -6541,124 +6560,305 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
-  function encodeFormForBatchSave(form) {
-    var pairs = [];
-    var els = form ? form.elements : [];
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (!el || !el.name || el.disabled) { continue; }
-      var type = (el.type || "").toLowerCase();
-      if ((type === "checkbox" || type === "radio") && !el.checked) { continue; }
-      if (type === "submit" || type === "button" || type === "file") { continue; }
-      pairs.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || ""));
+  function ensureSaveSetField(form) {
+    if (!form) { return; }
+    var saveSet = form.querySelector('[name="save_set"]');
+    if (!saveSet) {
+      saveSet = document.createElement("input");
+      saveSet.type = "hidden";
+      saveSet.name = "save_set";
+      form.appendChild(saveSet);
     }
-    pairs.push("save_set=1");
-    return pairs.join("&");
+    saveSet.value = "1";
   }
 
-  /* v15: direct/post batch auto-save helpers removed. Save All 9 now uses the old working normal form-submit flow below. */
+  function formatNowForDb() {
+    var d = new Date();
+    function pad2(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
 
-  function saveAllSequential(indices, doneCallback, saveCount, totalCount) {
-    if (saveCount === undefined) { saveCount = 0; }
-    if (totalCount === undefined) { totalCount = indices.length; }
-    if (!indices || indices.length === 0) {
-      if (doneCallback) { doneCallback(); }
+  function firstValueByIds(ids, fallback) {
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el && String(el.value || "").trim() !== "") {
+        return String(el.value);
+      }
+    }
+    return typeof fallback === "undefined" ? "" : fallback;
+  }
+
+  function setFieldValueIfPresent(id, value) {
+    var el = document.getElementById(id);
+    if (el) { el.value = (value == null ? "" : String(value)); }
+  }
+
+  function applyBatchResultToSaveForm(result, index) {
+    var form = qs("savePredictionForm");
+    if (!form || !result) { return false; }
+    ensureSaveSetField(form);
+
+    var mainNums = Array.isArray(result.mainNumbers) ? result.mainNumbers.slice() : [];
+    var extraNums = Array.isArray(result.extraNumbers) ? result.extraNumbers.slice() : [];
+    var effectiveMainRequired = Math.max(REQUIRED_MAIN_COUNT || 0, (typeof pickSize !== "undefined" ? parseInt(pickSize, 10) || 0 : 0));
+    if (!mainNums.length || mainNums.length < effectiveMainRequired) { return false; }
+
+    window.skaiSaveMainOrdered = mainNums.slice();
+    window.skaiSaveExtraOrdered = extraNums.slice();
+
+    setFieldValueIfPresent("saveMainNumbers", mainNums.join(","));
+    setFieldValueIfPresent("saveExtraBallNumbers", extraNums.join(","));
+    setFieldValueIfPresent("saveGeneratedAt", result.generatedAt || formatNowForDb());
+    setFieldValueIfPresent("saveEpochs", (result.settings && result.settings.epochs) || firstValueByIds(["epochs", "skaiadv_epochs", "saveEpochs"], ""));
+    setFieldValueIfPresent("saveBatchSize", (result.settings && result.settings.batchSize) || firstValueByIds(["batchSize", "skaiadv_batch", "saveBatchSize"], ""));
+    setFieldValueIfPresent("saveDropoutRate", (result.settings && result.settings.dropoutRate) || firstValueByIds(["dropoutRate", "skaiadv_dropout", "saveDropoutRate"], ""));
+    setFieldValueIfPresent("saveLearningRate", (result.settings && result.settings.learningRate) || firstValueByIds(["learningRate", "skaiadv_lr", "saveLearningRate"], ""));
+    setFieldValueIfPresent("saveActivationFunction", (result.settings && result.settings.activationFunction) || firstValueByIds(["activationFunction", "skaiadv_activation", "saveActivationFunction"], "relu"));
+    setFieldValueIfPresent("saveHiddenLayers", (result.settings && result.settings.hiddenLayers) || firstValueByIds(["hiddenLayers", "skaiadv_layers", "saveHiddenLayers"], ""));
+    setFieldValueIfPresent("saveRecencyDecay", (result.settings && result.settings.recencyDecay) || firstValueByIds(["recencyDecay", "skaiadv_recency_decay", "saveRecencyDecay"], ""));
+    setFieldValueIfPresent("saveModeKey", (result.combo && result.combo.profile) ? result.combo.profile : "balanced");
+    setFieldValueIfPresent("saveRiskProfile", (result.combo && result.combo.profile) ? result.combo.profile : "balanced");
+    setFieldValueIfPresent("saveStrategyProfile", (result.combo && result.combo.strategy) ? result.combo.strategy : "blend_50");
+    setFieldValueIfPresent("saveBatchType", "core_ai_9_batch_precision_lock");
+    setFieldValueIfPresent("saveBatchUuid", coreAiBatchUuid());
+    setFieldValueIfPresent("saveBatchIndex", String(index + 1));
+    setFieldValueIfPresent("saveBatchTotal", "9");
+    setFieldValueIfPresent("saveRunUuid", "");
+    setFieldValueIfPresent("saveClientResultHash", "");
+
+    var labelDate = new Date().toLocaleString();
+    var labelText = CORE_AI_LOTTERY_NAME + " - " + ((result.combo && result.combo.profile) ? result.combo.profile : "balanced") + " - " + ((result.combo && result.combo.strategy) ? result.combo.strategy : "blend_50") + " - " + labelDate;
+    setFieldValueIfPresent("saveLabel", labelText);
+
+    if (document.getElementById("saveSettingsJson")) {
+      setFieldValueIfPresent("saveSettingsJson", result.settingsJson || "");
+    }
+    if (document.getElementById("saveRankedMainNumbersJson")) {
+      setFieldValueIfPresent("saveRankedMainNumbersJson", result.rankedMainNumbersJson || "");
+    }
+    if (document.getElementById("saveRankedExtraNumbersJson")) {
+      setFieldValueIfPresent("saveRankedExtraNumbersJson", result.rankedExtraNumbersJson || "");
+    }
+    if (document.getElementById("saveMainDisplayJson")) {
+      setFieldValueIfPresent("saveMainDisplayJson", result.mainDisplayJson || "");
+    }
+    if (document.getElementById("saveExtraDisplayJson")) {
+      setFieldValueIfPresent("saveExtraDisplayJson", result.extraDisplayJson || "");
+    }
+    return true;
+  }
+
+  function submitSaveViaFetch(form) {
+    var formData = new FormData(form);
+    formData.set("save_set", "1");
+    if (!formData.get("main_numbers")) {
+      formData.set("main_numbers", firstValueByIds(["saveMainNumbers"], ""));
+    }
+    var body = new URLSearchParams();
+    formData.forEach(function (value, key) {
+      body.append(key, value == null ? "" : String(value));
+    });
+    return fetch(form.getAttribute("action") || window.location.href.split("#")[0], {
+      method: "POST",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+      credentials: "same-origin",
+      body: body
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        var parsed = null;
+        try { parsed = JSON.parse(text || "{}"); } catch (_) { parsed = null; }
+        if (resp.ok && parsed && parsed.success === true) {
+          return { ok: true, parsed: parsed, message: parsed.message || "Saved successfully." };
+        }
+        return { ok: false, parsed: parsed, message: (parsed && parsed.message) ? parsed.message : ("Save failed (HTTP " + resp.status + ").") };
+      });
+    }).catch(function (err) {
+      return { ok: false, parsed: null, message: (err && err.message) ? err.message : "Network error while saving." };
+    });
+  }
+
+  function submitPreparedBatchSave(form) {
+    return new Promise(function (resolve) {
+      if (!form) {
+        resolve({ ok: false, parsed: null, message: "Save form not found." });
+        return;
+      }
+      ensureSaveSetField(form);
+      var mainVal = firstValueByIds(["saveMainNumbers"], "");
+      if (!mainVal) {
+        resolve({ ok: false, parsed: null, message: "No main numbers were set before save." });
+        return;
+      }
+
+      if (!form.__skaiSaveIntercepted) {
+        submitSaveViaFetch(form).then(resolve);
+        return;
+      }
+
+      var finished = false;
+      var timer = null;
+      function finish(payload) {
+        if (finished) { return; }
+        finished = true;
+        try { window.removeEventListener("skai:save:ajax:complete", onAjaxDone, false); } catch (_) {}
+        try { clearTimeout(timer); } catch (_) {}
+        resolve(payload || { ok: false, parsed: null, message: "Unknown save state." });
+      }
+      function onAjaxDone(ev) {
+        var d = (ev && ev.detail) ? ev.detail : {};
+        finish({
+          ok: !!d.ok,
+          parsed: d.parsed || null,
+          message: d.message || (d.ok ? "Saved successfully." : "Save failed."),
+          status: d.status
+        });
+      }
+
+      window.addEventListener("skai:save:ajax:complete", onAjaxDone, false);
+      timer = setTimeout(function () {
+        finish({ ok: false, parsed: null, message: "Timed out waiting for save response." });
+      }, 25000);
+
+      try {
+        var ev;
+        try { ev = new Event("submit", { bubbles: true, cancelable: true }); }
+        catch (_) { ev = document.createEvent("Event"); ev.initEvent("submit", true, true); }
+        form.dispatchEvent(ev);
+      } catch (submitErr) {
+        finish({ ok: false, parsed: null, message: (submitErr && submitErr.message) ? submitErr.message : "Could not dispatch save submit." });
+      }
+    });
+  }
+
+  function saveAllSequential(indices, doneCallback) {
+    if (batchDoneCount < BATCH_COMBOS.length) {
+      if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Please wait for all runs to finish before saving the batch.", "error"); }
       return;
     }
-    var idx = indices[0];
-    var rest = indices.slice(1);
-    var r = batchResults[idx];
-    if (!r || !r.done) {
-      saveAllSequential(rest, doneCallback, saveCount, totalCount);
-      return;
-    }
-
-    try { selectProfile(r.combo.profile); } catch (_) {}
-    try { selectStrategy(r.combo.strategy); } catch (_) {}
 
     var form = qs("savePredictionForm");
     if (!form) {
-      saveAllSequential(rest, doneCallback, saveCount, totalCount);
+      if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Save form not found.", "error"); }
+      if (doneCallback) { doneCallback(); }
       return;
     }
 
-    try {
-      if (r.mainNumbers && r.mainNumbers.length) {
-        window.skaiSaveMainOrdered  = r.mainNumbers.slice();
-        window.skaiSaveExtraOrdered = (r.extraNumbers && r.extraNumbers.length)
-          ? r.extraNumbers.slice() : [];
-        var mainField = document.getElementById("saveMainNumbers");
-        if (mainField) { mainField.value = r.mainNumbers.join(","); }
-        var extraField = document.getElementById("saveExtraBallNumbers");
-        if (extraField) { extraField.value = (r.extraNumbers || []).join(","); }
+    var queue = Array.isArray(indices) && indices.length ? indices.slice() : [];
+    if (!queue.length) {
+      for (var q = 0; q < batchResults.length; q++) { queue.push(q); }
+    }
+
+    var eligible = [];
+    var requiredMain = Math.max(REQUIRED_MAIN_COUNT || 0, (typeof pickSize !== "undefined" ? parseInt(pickSize, 10) || 0 : 0));
+    for (var i = 0; i < queue.length; i++) {
+      var idx = queue[i];
+      var r = batchResults[idx];
+      if (!r || !r.done || r.saved) { continue; }
+      if (!Array.isArray(r.mainNumbers) || r.mainNumbers.length < requiredMain) {
+        setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Needs review", "#b45309", true), "warning");
+        continue;
       }
-      /* Update label to include combo name so each save is distinct */
-      var LABEL_DELIMITER = " | ";
-      var labelField = document.getElementById("saveLabel");
-      if (labelField && r.combo && r.combo.label) {
-        var baseLbl = labelField.value || "Prediction";
-        /* Strip any previous combo suffix (format: "... | Combo Name") */
-        var pipeIdx = baseLbl.indexOf(LABEL_DELIMITER);
-        if (pipeIdx >= 0) { baseLbl = baseLbl.substring(0, pipeIdx); }
-        labelField.value = baseLbl + LABEL_DELIMITER + r.combo.label;
+      eligible.push(idx);
+    }
+    if (!eligible.length) {
+      if (window.skaiShowSaveToast) { window.skaiShowSaveToast("No completed runs are available to save.", "error"); }
+      if (doneCallback) { doneCallback(); }
+      return;
+    }
+
+    var saveCursor = 0;
+    function step() {
+      if (saveCursor >= eligible.length) {
+        persistResults();
+        if (doneCallback) { doneCallback(); }
+        return;
       }
-    } catch (_) {}
 
-    /* Show saving progress: Saving 1 of 9, 2 of 9 ... */
-    var currentSaveNum = saveCount + 1;
-    if (window.skaiShowSaveToast) {
-      window.skaiShowSaveToast("Saving " + currentSaveNum + " of " + totalCount + "...");
-    }
+      var idx = eligible[saveCursor];
+      var r = batchResults[idx];
+      if (!r) { saveCursor += 1; step(); return; }
 
-    try {
-      var batchUuidField = document.getElementById("saveBatchUuid");
-      var batchIndexField = document.getElementById("saveBatchIndex");
-      var batchTotalField = document.getElementById("saveBatchTotal");
-      var batchTypeField = document.getElementById("saveBatchType");
-      var riskField = document.getElementById("saveRiskProfile");
-      var strategyField = document.getElementById("saveStrategyProfile");
-      if (batchUuidField) { batchUuidField.value = coreAiBatchUuid(); }
-      if (batchIndexField) { batchIndexField.value = String(idx + 1); }
-      if (batchTotalField) { batchTotalField.value = String(BATCH_COMBOS.length); }
-      if (batchTypeField) { batchTypeField.value = (CORE_AI_HANDOFF_BATCH ? "core_ai_range_test_9_batch" : "core_ai_precision_lock_9_batch"); }
-      if (riskField && r.combo) { riskField.value = r.combo.profile || ""; }
-      if (strategyField && r.combo) { strategyField.value = "blend_" + (r.combo.blend_ai_pct || 50); }
-    } catch (_) {}
+      try { selectProfile(r.combo.profile); } catch (_) {}
+      try { selectStrategy(r.combo.strategy); } catch (_) {}
 
-    var modeField = document.getElementById("saveModeKey");
-    if (modeField && r.combo) {
-      modeField.value = (r.combo.blend_ai_pct <= 30) ? "skip-dominant" : (r.combo.blend_ai_pct >= 70 ? "ai-forward" : "mixed");
-    }
-    if (typeof window.coreAiSetSignalBlendPct === "function" && r.combo && r.combo.blend_ai_pct) {
-      window.coreAiSetSignalBlendPct(r.combo.blend_ai_pct);
-    }
-    var runField = document.getElementById("saveRunUuid");
-    if (runField) { runField.value = ""; }
-    var hashField = document.getElementById("saveClientResultHash");
-    if (hashField) { hashField.value = ""; }
+      if (!applyBatchResultToSaveForm(r, idx)) {
+        r.saveError = "Needs review: missing required main numbers.";
+        renderCompletedCell(idx, false, r.saveError);
+        persistResults();
+        saveCursor += 1;
+        step();
+        return;
+      }
 
-    function submitPreparedBatchSave() {
-      var ev = document.createEvent("Event");
-      ev.initEvent("submit", true, true);
-      form.dispatchEvent(ev);
+      var preMain = firstValueByIds(["saveMainNumbers"], "");
+      var preExtra = firstValueByIds(["saveExtraBallNumbers"], "");
+      try {
+        console.log("[SKAI batch save] before save", {
+          batch_index: idx + 1,
+          profile: r.combo ? r.combo.profile : "",
+          strategy: r.combo ? r.combo.strategy : "",
+          saveMainNumbers: preMain,
+          saveExtraBallNumbers: preExtra,
+          saveBatchUuid: firstValueByIds(["saveBatchUuid"], ""),
+          saveBatchIndex: firstValueByIds(["saveBatchIndex"], "")
+        });
+      } catch (_) {}
 
-      setTimeout(function () {
-        saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
-      }, 2500); /* 2.5-second delay between sequential saves */
-    }
+      if (window.skaiShowSaveToast) {
+        window.skaiShowSaveToast("Saving " + (saveCursor + 1) + " of " + eligible.length + "...");
+      }
 
-    if (typeof window.skaiPrepareClientIntegrity === "function") {
-      window.skaiPrepareClientIntegrity().then(submitPreparedBatchSave).catch(function () {
-        if (window.skaiShowSaveToast) {
-          window.skaiShowSaveToast("Could not prepare secure save for this batch run.", "error");
+      var prepPromise = (typeof window.skaiPrepareClientIntegrity === "function")
+        ? window.skaiPrepareClientIntegrity().catch(function (prepErr) {
+            try { console.warn("[SKAI batch save] skaiPrepareClientIntegrity failed:", prepErr); } catch (_) {}
+            return "";
+          })
+        : Promise.resolve("");
+
+      prepPromise.then(function () {
+        try {
+          console.log("[SKAI batch save] client_result_hash", firstValueByIds(["saveClientResultHash"], ""));
+        } catch (_) {}
+        return submitPreparedBatchSave(form);
+      }).then(function (outcome) {
+        var ok = !!(outcome && outcome.ok);
+        var parsed = (outcome && outcome.parsed) ? outcome.parsed : null;
+        var msg = (outcome && outcome.message) ? outcome.message : (ok ? "Saved successfully." : "Save failed.");
+        if (ok) {
+          r.saved = true;
+          r.saveError = "";
+          r.savedId = parsed && parsed.saved_id ? parseInt(parsed.saved_id, 10) || 0 : 0;
+          renderCompletedCell(idx, true, msg);
+        } else {
+          r.saved = false;
+          r.saveError = msg;
+          renderCompletedCell(idx, false, msg);
+          setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Save failed: " + msg, "#dc2626", true), "error");
         }
-        setTimeout(function () {
-          saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
-        }, 1200);
+        persistResults();
+        try { console.log("[SKAI batch save] response", { success: ok, message: msg }); } catch (_) {}
+        saveCursor += 1;
+        setTimeout(step, 150);
+      }).catch(function (err) {
+        var errMsg = (err && err.message) ? err.message : "Save failed.";
+        r.saved = false;
+        r.saveError = errMsg;
+        renderCompletedCell(idx, false, errMsg);
+        setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Save failed: " + errMsg, "#dc2626", true), "error");
+        persistResults();
+        try { console.log("[SKAI batch save] response", { success: false, message: errMsg }); } catch (_) {}
+        saveCursor += 1;
+        setTimeout(step, 150);
       });
-    } else {
-      submitPreparedBatchSave();
     }
+
+    step();
+  }
+
+  function saveSelected(chosen) {
+    saveAllSequential(chosen, function () {
+      if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Selected runs saved."); }
+    });
   }
 
   function wireButtons() {
@@ -6698,6 +6898,7 @@ document.addEventListener('DOMContentLoaded', function () {
         batchStopped = false;
         batchIndex = 0;
         batchDoneCount = 0;
+        batchUuid = "";
         batchResults = [];
         var saveRow = qs("skai-batch-save-row");
         if (saveRow) { saveRow.style.display = "none"; }
@@ -6729,6 +6930,7 @@ document.addEventListener('DOMContentLoaded', function () {
         batchResults = [];
         batchDoneCount = 0;
         batchIndex = 0;
+        batchUuid = "";
         try { sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
         renderDynamicBatchGrid();
         resetGrid();
@@ -6764,17 +6966,8 @@ document.addEventListener('DOMContentLoaded', function () {
     if (saveAllBtn) {
       saveAllBtn.addEventListener("click", function () {
         if (!window.confirm("Save all completed runs to your dashboard?")) { return; }
-        var indices = [];
-        for (var i = 0; i < batchResults.length; i++) {
-          if (batchResults[i] && batchResults[i].done && !batchResults[i].saved) { indices.push(i); }
-        }
-        if (indices.length === 0) {
-          alert("No completed runs are available to save.");
-          return;
-        }
-        var totalRuns = indices.length;
-        saveAllSequential(indices, function () {
-          if (window.skaiShowSaveToast) { window.skaiShowSaveToast("All " + totalRuns + " " + (totalRuns === 1 ? "run" : "runs") + " saved to your dashboard."); }
+        saveAllSequential(null, function () {
+          if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Save All 9 finished."); }
         });
       }, false);
     }
@@ -6807,9 +7000,7 @@ document.addEventListener('DOMContentLoaded', function () {
           }
         }
         if (chosen.length === 0) { alert("No valid selections."); return; }
-        saveAllSequential(chosen, function () {
-          if (window.skaiShowSaveToast) { window.skaiShowSaveToast("Selected runs saved."); }
-        });
+        saveSelected(chosen);
       }, false);
     }
   }
