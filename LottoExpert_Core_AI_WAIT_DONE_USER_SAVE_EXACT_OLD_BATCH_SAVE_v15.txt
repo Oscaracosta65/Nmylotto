@@ -5472,43 +5472,21 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function formToEncodedBody(form) {
-    var data = [];
-    var inputs = form.elements;
-
-    for (var i = 0; i < inputs.length; i++) {
-      var el = inputs[i];
-
-      if (!el.name) {
-        continue;
-      }
-
-      var tag = el.tagName.toUpperCase();
-
-      if (tag === "INPUT") {
-        if ((el.type === "checkbox" || el.type === "radio") && !el.checked) {
-          continue;
-        }
-
-        data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || ""));
-      } else if (tag === "TEXTAREA" || tag === "SELECT") {
-        data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || ""));
-      } else if (tag === "BUTTON" && el.type === "submit" && el.name) {
-        data.push(encodeURIComponent(el.name) + "=" + encodeURIComponent(el.value || "1"));
-      }
+    var data = new FormData(form);
+    if (!data.get("save_set")) {
+      data.set("save_set", "1");
+    }
+    if (!data.get("main_numbers")) {
+      data.set("main_numbers", firstValueByIds(["saveMainNumbers"], ""));
     }
 
     try {
-      if (form && form.id === 'savePredictionForm' && window.coreAiLastResultPayload) {
-        var payloadJson = JSON.stringify(window.coreAiLastResultPayload);
-        var hasSnapshot = false;
-        for (var si = 0; si < data.length; si++) {
-          if (data[si].indexOf('core_ai_snapshot_json=') === 0) { hasSnapshot = true; break; }
-        }
-        if (!hasSnapshot) { data.push('core_ai_snapshot_json=' + encodeURIComponent(payloadJson)); }
+      if (form && form.id === 'savePredictionForm' && window.coreAiLastResultPayload && !data.get("core_ai_snapshot_json")) {
+        data.set("core_ai_snapshot_json", JSON.stringify(window.coreAiLastResultPayload));
       }
     } catch (_) {}
 
-    return data.join("&");
+    return data;
   }
 
   function setButtonState(button, saving) {
@@ -5568,9 +5546,15 @@ document.addEventListener('DOMContentLoaded', function () {
       var body = formToEncodedBody(form);
       var url = form.getAttribute("action") || window.location.href.split("#")[0];
 
+      if (!body.get("main_numbers")) {
+        setButtonState(submitBtn, false);
+        showSaveToast("Not saved - missing numbers", "error");
+        try { window.dispatchEvent(new CustomEvent("skai:save:ajax:complete", { detail: { ok: false, parsed: null, message: "Not saved - missing numbers" } })); } catch (_) {}
+        return false;
+      }
+
       var xhr = new XMLHttpRequest();
       xhr.open("POST", url, true);
-      xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
       xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
 
       xhr.onreadystatechange = function () {
@@ -6352,9 +6336,13 @@ document.addEventListener('DOMContentLoaded', function () {
     setCurrentLabel(batchStopped ? "Batch stopped." : "All runs complete.");
     try { console.log("[SKAI batch] onBatchEnd: " + batchDoneCount + "/" + BATCH_COMBOS.length + " combos done, stopped=" + batchStopped); } catch (_) {}
     var saveRow = qs("skai-batch-save-row");
+    var saveAllBtn = qs("skai-batch-save-all");
+    var saveSelBtn = qs("skai-batch-save-selected");
     if (saveRow && !batchStopped && allBatchRunsComplete()) {
       saveRow.style.display = "flex";
     }
+    if (saveAllBtn) { saveAllBtn.disabled = !(!batchStopped && allBatchRunsComplete()); }
+    if (saveSelBtn) { saveSelBtn.disabled = !(!batchStopped && allBatchRunsComplete()); }
     if (!batchStopped && allBatchRunsComplete()) {
       setBatchSaveNote("Batch complete. Click Save All 9 to save every completed result, or Save Selected to choose specific runs.", "success");
     }
@@ -6565,7 +6553,7 @@ document.addEventListener('DOMContentLoaded', function () {
       setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Saved", "#16a34a", true), "done");
       return;
     }
-    setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, "Save failed", "#dc2626", true), "error");
+    setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, saveMessage || "Save failed", "#dc2626", true), "error");
   }
 
   function setBatchSaveNote(message, tone) {
@@ -6654,7 +6642,7 @@ document.addEventListener('DOMContentLoaded', function () {
     setFieldValueIfPresent("saveClientResultHash", "");
 
     var labelDate = new Date().toLocaleString();
-    var labelText = CORE_AI_LOTTERY_NAME + " - " + ((result.combo && result.combo.profile) ? result.combo.profile : "balanced") + " - " + ((result.combo && result.combo.strategy) ? result.combo.strategy : "blend_50") + " - " + labelDate;
+    var labelText = "LottoExpert AI Batch - " + ((result.combo && result.combo.profile) ? result.combo.profile : "balanced") + " / " + ((result.combo && result.combo.strategy) ? result.combo.strategy : "blend_50") + " - " + labelDate;
     setFieldValueIfPresent("saveLabel", labelText);
 
     if (document.getElementById("saveSettingsJson")) {
@@ -6722,7 +6710,7 @@ document.addEventListener('DOMContentLoaded', function () {
       ensureSaveSetField(form);
       var mainVal = firstValueByIds(["saveMainNumbers"], "");
       if (!mainVal) {
-        resolve({ ok: false, parsed: null, message: "No main numbers were set before save." });
+        resolve({ ok: false, parsed: null, message: "Not saved - missing numbers" });
         return;
       }
 
@@ -6820,27 +6808,13 @@ document.addEventListener('DOMContentLoaded', function () {
       try { selectStrategy(r.combo.strategy); } catch (_) {}
 
       if (!applyBatchResultToSaveForm(r, idx)) {
-        r.saveError = "Needs review: missing required main numbers.";
+        r.saveError = "Not saved - missing numbers";
         renderCompletedCell(idx, false, r.saveError);
         persistResults();
         saveCursor += 1;
         step();
         return;
       }
-
-      var preMain = firstValueByIds(["saveMainNumbers"], "");
-      var preExtra = firstValueByIds(["saveExtraBallNumbers"], "");
-      try {
-        console.log("[SKAI batch save] before save", {
-          batch_index: idx + 1,
-          profile: r.combo ? r.combo.profile : "",
-          strategy: r.combo ? r.combo.strategy : "",
-          saveMainNumbers: preMain,
-          saveExtraBallNumbers: preExtra,
-          saveBatchUuid: firstValueByIds(["saveBatchUuid"], ""),
-          saveBatchIndex: firstValueByIds(["saveBatchIndex"], "")
-        });
-      } catch (_) {}
 
       if (window.skaiShowSaveToast) {
         window.skaiShowSaveToast("Saving " + (saveCursor + 1) + " of " + eligible.length + "...");
@@ -6854,11 +6828,32 @@ document.addEventListener('DOMContentLoaded', function () {
         : Promise.resolve("");
 
       prepPromise.then(function () {
+        var preflightFormData = formToEncodedBody(form);
+        if (!preflightFormData.get("main_numbers")) {
+          r.saved = false;
+          r.saveError = "Not saved - missing numbers";
+          renderCompletedCell(idx, false, r.saveError);
+          setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, r.saveError, "#dc2626", true), "error");
+          persistResults();
+          saveCursor += 1;
+          setTimeout(step, SEQUENTIAL_SAVE_DELAY_MS);
+          return null;
+        }
         try {
-          console.log("[SKAI batch save] client_result_hash", firstValueByIds(["saveClientResultHash"], ""));
+          console.log("BATCH SAVE PAYLOAD", {
+            index: idx + 1,
+            profile: r.combo && r.combo.profile,
+            strategy: r.combo && r.combo.strategy,
+            main_numbers: document.getElementById("saveMainNumbers") ? document.getElementById("saveMainNumbers").value : "",
+            extra_ball_numbers: document.getElementById("saveExtraBallNumbers") ? document.getElementById("saveExtraBallNumbers").value : "",
+            save_set: preflightFormData.get("save_set"),
+            run_uuid: document.getElementById("saveRunUuid") ? document.getElementById("saveRunUuid").value : "",
+            client_result_hash: document.getElementById("saveClientResultHash") ? document.getElementById("saveClientResultHash").value : ""
+          });
         } catch (_) {}
         return submitPreparedBatchSave(form);
       }).then(function (outcome) {
+        if (outcome === null) { return; }
         var ok = !!(outcome && outcome.ok);
         var parsed = (outcome && outcome.parsed) ? outcome.parsed : null;
         var msg = (outcome && outcome.message) ? outcome.message : (ok ? "Saved successfully." : "Save failed.");
@@ -6872,6 +6867,7 @@ document.addEventListener('DOMContentLoaded', function () {
           r.saveError = msg;
           renderCompletedCell(idx, false, msg);
           setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, msg, "#dc2626", true), "error");
+          try { console.error("[SKAI batch save] exact failure", { index: idx + 1, message: msg, parsed: parsed }); } catch (_) {}
         }
         persistResults();
         try { console.log("[SKAI batch save] response", { success: ok, message: msg }); } catch (_) {}
@@ -6884,6 +6880,7 @@ document.addEventListener('DOMContentLoaded', function () {
         renderCompletedCell(idx, false, errMsg);
         setCell(r.combo.profile, r.combo.strategy, buildBatchCellNode(idx, errMsg, "#dc2626", true), "error");
         persistResults();
+        try { console.error("[SKAI batch save] exact failure", { index: idx + 1, message: errMsg }); } catch (_) {}
         try { console.log("[SKAI batch save] response", { success: false, message: errMsg }); } catch (_) {}
         saveCursor += 1;
         setTimeout(step, SEQUENTIAL_SAVE_DELAY_MS);
@@ -6909,6 +6906,9 @@ document.addEventListener('DOMContentLoaded', function () {
     var detailClose = qs("skai-batch-detail-close");
     var saveAllBtn = qs("skai-batch-save-all");
     var saveSelBtn = qs("skai-batch-save-selected");
+
+    if (saveAllBtn) { saveAllBtn.disabled = true; }
+    if (saveSelBtn) { saveSelBtn.disabled = true; }
 
     if (launchBtn) {
       launchBtn.addEventListener("click", function () {
@@ -6940,6 +6940,8 @@ document.addEventListener('DOMContentLoaded', function () {
         batchResults = [];
         var saveRow = qs("skai-batch-save-row");
         if (saveRow) { saveRow.style.display = "none"; }
+        if (saveAllBtn) { saveAllBtn.disabled = true; }
+        if (saveSelBtn) { saveSelBtn.disabled = true; }
         var stopBtn2 = qs("skai-batch-stop");
         if (stopBtn2) { stopBtn2.disabled = false; }
         var detailEl = qs("skai-batch-detail");
@@ -6978,6 +6980,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (detail2) { detail2.style.display = "none"; }
         var saveRow2 = qs("skai-batch-save-row");
         if (saveRow2) { saveRow2.style.display = "none"; }
+        if (saveAllBtn) { saveAllBtn.disabled = true; }
+        if (saveSelBtn) { saveSelBtn.disabled = true; }
         var monitorAnchor = qs("core-ai-batch-monitor-anchor");
         if (monitorAnchor) { monitorAnchor.style.display = "none"; }
       }, false);
