@@ -6266,6 +6266,27 @@ document.addEventListener('DOMContentLoaded', function () {
        */
       var verified = !!hasValidNumbers;
 
+      /* Capture current settings and JSON metadata at run-completion time so each
+         batch result carries its own snapshot (not overwritten by subsequent runs). */
+      function coreAiGetFieldValForCapture(id) {
+        var el = document.getElementById(id);
+        return el ? (el.value || "") : "";
+      }
+      var capturedSettings = {
+        epochs:             coreAiGetFieldValForCapture("saveEpochs")             || coreAiGetFieldValForCapture("epochs"),
+        batchSize:          coreAiGetFieldValForCapture("saveBatchSize")          || coreAiGetFieldValForCapture("batchSize"),
+        dropoutRate:        coreAiGetFieldValForCapture("saveDropoutRate")        || coreAiGetFieldValForCapture("dropoutRate"),
+        learningRate:       coreAiGetFieldValForCapture("saveLearningRate")       || coreAiGetFieldValForCapture("learningRate"),
+        activationFunction: coreAiGetFieldValForCapture("saveActivationFunction") || coreAiGetFieldValForCapture("activationFunction"),
+        hiddenLayers:       coreAiGetFieldValForCapture("saveHiddenLayers")       || coreAiGetFieldValForCapture("hiddenLayers"),
+        recencyDecay:       coreAiGetFieldValForCapture("saveRecencyDecay")       || coreAiGetFieldValForCapture("recencyDecay")
+      };
+      var capturedGeneratedAt = (new Date()).toISOString().replace("T", " ").substring(0, 19);
+      var capturedRankedMainJson  = coreAiGetFieldValForCapture("saveRankedMainNumbersJson");
+      var capturedRankedExtraJson = coreAiGetFieldValForCapture("saveRankedExtraNumbersJson");
+      var capturedMainDisplayJson = coreAiGetFieldValForCapture("saveMainDisplayJson");
+      var capturedExtraDisplayJson = coreAiGetFieldValForCapture("saveExtraDisplayJson");
+
       batchResults[idx] = {
         combo: combo,
         html: res.html,
@@ -6281,7 +6302,13 @@ document.addEventListener('DOMContentLoaded', function () {
         savedId: 0,
         saveError: "",
         mainNumbers: mainNums,
-        extraNumbers: extraNums
+        extraNumbers: extraNums,
+        settings: capturedSettings,
+        generatedAt: capturedGeneratedAt,
+        rankedMainNumbersJson:  capturedRankedMainJson,
+        rankedExtraNumbersJson: capturedRankedExtraJson,
+        mainDisplayJson:        capturedMainDisplayJson,
+        extraDisplayJson:       capturedExtraDisplayJson
       };
 
       persistResults();
@@ -6556,7 +6583,141 @@ document.addEventListener('DOMContentLoaded', function () {
     return pairs.join("&");
   }
 
-  /* v15: direct/post batch auto-save helpers removed. Save All 9 now uses the old working normal form-submit flow below. */
+  /* v15: direct/post batch auto-save helpers removed. Save All 9 now uses the reference-file normal form-submit flow. */
+
+  /*
+   * applyBatchResultToSaveForm
+   * Copies a completed batch result's numbers and settings into the normal
+   * savePredictionForm hidden fields BEFORE skaiPrepareClientIntegrity is called.
+   * Required field population order (per reference file):
+   *   1. Write all form fields (numbers, settings, metadata)
+   *   2. Call skaiPrepareClientIntegrity()  ← hash computed after fields are written
+   *   3. Create FormData / send
+   */
+  function applyBatchResultToSaveForm(r, idx) {
+    function setf(id, value) {
+      var el = document.getElementById(id);
+      if (el && value !== undefined && value !== null) { el.value = String(value); }
+    }
+
+    if (!r || !r.combo) { return; }
+
+    /* Numbers */
+    window.skaiSaveMainOrdered  = r.mainNumbers ? r.mainNumbers.slice() : [];
+    window.skaiSaveExtraOrdered = r.extraNumbers ? r.extraNumbers.slice() : [];
+    setf("saveMainNumbers",       r.mainNumbers  ? r.mainNumbers.join(",")  : "");
+    setf("saveExtraBallNumbers",  r.extraNumbers ? r.extraNumbers.join(",") : "");
+
+    /* Timestamp */
+    setf("saveGeneratedAt", r.generatedAt || (new Date()).toISOString().replace("T", " ").substring(0, 19));
+
+    /* Settings captured at run-completion time */
+    if (r.settings) {
+      if (r.settings.epochs)             { setf("saveEpochs",             r.settings.epochs); }
+      if (r.settings.batchSize)          { setf("saveBatchSize",          r.settings.batchSize); }
+      if (r.settings.dropoutRate)        { setf("saveDropoutRate",        r.settings.dropoutRate); }
+      if (r.settings.learningRate)       { setf("saveLearningRate",       r.settings.learningRate); }
+      if (r.settings.activationFunction) { setf("saveActivationFunction", r.settings.activationFunction); }
+      if (r.settings.hiddenLayers)       { setf("saveHiddenLayers",       r.settings.hiddenLayers); }
+      if (r.settings.recencyDecay)       { setf("saveRecencyDecay",       r.settings.recencyDecay); }
+    }
+
+    /* Mode key derived from blend percentage */
+    setf("saveModeKey",
+      (r.combo.blend_ai_pct <= 30) ? "skip-dominant" : (r.combo.blend_ai_pct >= 70 ? "ai-forward" : "mixed"));
+
+    /* Label: strip previous combo suffix then append current */
+    var LABEL_DELIMITER = " | ";
+    var labelField = document.getElementById("saveLabel");
+    if (labelField && r.combo && r.combo.label) {
+      var baseLbl = labelField.value || "Prediction";
+      var pipeIdx = baseLbl.indexOf(LABEL_DELIMITER);
+      if (pipeIdx >= 0) { baseLbl = baseLbl.substring(0, pipeIdx); }
+      labelField.value = baseLbl + LABEL_DELIMITER + r.combo.label;
+    }
+
+    /* Batch metadata fields (current/new file only — set if element exists) */
+    setf("saveBatchUuid",      coreAiBatchUuid());
+    setf("saveBatchIndex",     String(idx + 1));
+    setf("saveBatchTotal",     String(BATCH_COMBOS.length));
+    setf("saveBatchType",      CORE_AI_HANDOFF_BATCH ? "core_ai_range_test_9_batch" : "core_ai_precision_lock_9_batch");
+    setf("saveRiskProfile",    r.combo.profile || "");
+    setf("saveStrategyProfile","blend_" + (r.combo.blend_ai_pct || 50));
+
+    /* JSON evidence metadata */
+    if (r.rankedMainNumbersJson)  { setf("saveRankedMainNumbersJson",  r.rankedMainNumbersJson); }
+    if (r.rankedExtraNumbersJson) { setf("saveRankedExtraNumbersJson", r.rankedExtraNumbersJson); }
+    if (r.mainDisplayJson)        { setf("saveMainDisplayJson",        r.mainDisplayJson); }
+    if (r.extraDisplayJson)       { setf("saveExtraDisplayJson",       r.extraDisplayJson); }
+
+    /* Clear integrity fields — skaiPrepareClientIntegrity will repopulate them */
+    setf("saveRunUuid",          "");
+    setf("saveClientResultHash", "");
+
+    /* Sync profile/strategy UI + blend signal */
+    try { selectProfile(r.combo.profile); } catch (_) {}
+    try {
+      var mappedStrat = (r.combo.blend_ai_pct <= 30) ? "skip" : (r.combo.blend_ai_pct >= 70 ? "ai" : "hybrid");
+      selectStrategy(mappedStrat);
+    } catch (_) {}
+    if (typeof window.coreAiSetSignalBlendPct === "function" && r.combo.blend_ai_pct) {
+      window.coreAiSetSignalBlendPct(r.combo.blend_ai_pct);
+    }
+  }
+
+  /*
+   * submitSaveFormAjax
+   * Sends the normal savePredictionForm via FormData+fetch, returns a Promise.
+   * Called by saveAllSequential AFTER applyBatchResultToSaveForm and
+   * skaiPrepareClientIntegrity have both completed.
+   *
+   * Pre-flight checks (per reference file):
+   *   - save_set must be present
+   *   - main_numbers must not be empty
+   *   - lottery_id must not be empty
+   *   - draws_analyzed must not be empty
+   */
+  function submitSaveFormAjax() {
+    var form = document.getElementById("savePredictionForm");
+    if (!form) {
+      return Promise.resolve({ success: false, message: "Save form not found." });
+    }
+
+    var fd = new FormData(form);
+
+    if (!fd.get("save_set")) {
+      fd.append("save_set", "1");
+    }
+
+    if (!fd.get("main_numbers")) {
+      return Promise.resolve({ success: false, message: "Not saved - missing numbers." });
+    }
+
+    if (!fd.get("lottery_id")) {
+      return Promise.resolve({ success: false, message: "Not saved - missing lottery_id." });
+    }
+
+    if (!fd.get("draws_analyzed") && fd.get("draws_analyzed") !== "0") {
+      return Promise.resolve({ success: false, message: "Not saved - missing draws_analyzed." });
+    }
+
+    return fetch(window.location.href, {
+      method: "POST",
+      body: fd,
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "XMLHttpRequest" }
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          return { success: false, message: "Save returned non-JSON response: " + text.substring(0, 500) };
+        }
+      });
+    }).catch(function (err) {
+      return { success: false, message: err && err.message ? err.message : "Network save failed." };
+    });
+  }
 
   function saveAllSequential(indices, doneCallback, saveCount, totalCount) {
     if (saveCount === undefined) { saveCount = 0; }
@@ -6573,91 +6734,78 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
 
-    try { selectProfile(r.combo.profile); } catch (_) {}
-    try { selectStrategy(r.combo.strategy); } catch (_) {}
-
     var form = qs("savePredictionForm");
     if (!form) {
       saveAllSequential(rest, doneCallback, saveCount, totalCount);
       return;
     }
 
-    try {
-      if (r.mainNumbers && r.mainNumbers.length) {
-        window.skaiSaveMainOrdered  = r.mainNumbers.slice();
-        window.skaiSaveExtraOrdered = (r.extraNumbers && r.extraNumbers.length)
-          ? r.extraNumbers.slice() : [];
-        var mainField = document.getElementById("saveMainNumbers");
-        if (mainField) { mainField.value = r.mainNumbers.join(","); }
-        var extraField = document.getElementById("saveExtraBallNumbers");
-        if (extraField) { extraField.value = (r.extraNumbers || []).join(","); }
-      }
-      /* Update label to include combo name so each save is distinct */
-      var LABEL_DELIMITER = " | ";
-      var labelField = document.getElementById("saveLabel");
-      if (labelField && r.combo && r.combo.label) {
-        var baseLbl = labelField.value || "Prediction";
-        /* Strip any previous combo suffix (format: "... | Combo Name") */
-        var pipeIdx = baseLbl.indexOf(LABEL_DELIMITER);
-        if (pipeIdx >= 0) { baseLbl = baseLbl.substring(0, pipeIdx); }
-        labelField.value = baseLbl + LABEL_DELIMITER + r.combo.label;
-      }
-    } catch (_) {}
-
-    /* Show saving progress: Saving 1 of 9, 2 of 9 ... */
     var currentSaveNum = saveCount + 1;
     if (window.skaiShowSaveToast) {
       window.skaiShowSaveToast("Saving " + currentSaveNum + " of " + totalCount + "...");
     }
 
-    try {
-      var batchUuidField = document.getElementById("saveBatchUuid");
-      var batchIndexField = document.getElementById("saveBatchIndex");
-      var batchTotalField = document.getElementById("saveBatchTotal");
-      var batchTypeField = document.getElementById("saveBatchType");
-      var riskField = document.getElementById("saveRiskProfile");
-      var strategyField = document.getElementById("saveStrategyProfile");
-      if (batchUuidField) { batchUuidField.value = coreAiBatchUuid(); }
-      if (batchIndexField) { batchIndexField.value = String(idx + 1); }
-      if (batchTotalField) { batchTotalField.value = String(BATCH_COMBOS.length); }
-      if (batchTypeField) { batchTypeField.value = (CORE_AI_HANDOFF_BATCH ? "core_ai_range_test_9_batch" : "core_ai_precision_lock_9_batch"); }
-      if (riskField && r.combo) { riskField.value = r.combo.profile || ""; }
-      if (strategyField && r.combo) { strategyField.value = "blend_" + (r.combo.blend_ai_pct || 50); }
-    } catch (_) {}
+    /* Step 1: write all form fields from this batch result */
+    applyBatchResultToSaveForm(r, idx);
 
-    var modeField = document.getElementById("saveModeKey");
-    if (modeField && r.combo) {
-      modeField.value = (r.combo.blend_ai_pct <= 30) ? "skip-dominant" : (r.combo.blend_ai_pct >= 70 ? "ai-forward" : "mixed");
-    }
-    if (typeof window.coreAiSetSignalBlendPct === "function" && r.combo && r.combo.blend_ai_pct) {
-      window.coreAiSetSignalBlendPct(r.combo.blend_ai_pct);
-    }
-    var runField = document.getElementById("saveRunUuid");
-    if (runField) { runField.value = ""; }
-    var hashField = document.getElementById("saveClientResultHash");
-    if (hashField) { hashField.value = ""; }
+    /* Step 2: compute integrity hash (reads main_numbers that were just written) */
+    if (typeof window.skaiPrepareClientIntegrity === "function") {
+      window.skaiPrepareClientIntegrity().then(function () {
 
-    function submitPreparedBatchSave() {
+        /* Step 3: diagnostic log AFTER fields are written and hash is ready */
+        try {
+          console.log("BATCH SAVE CHECK", {
+            index: idx + 1,
+            main_numbers:       document.getElementById("saveMainNumbers")       ? document.getElementById("saveMainNumbers").value       : "",
+            extra_ball_numbers: document.getElementById("saveExtraBallNumbers")  ? document.getElementById("saveExtraBallNumbers").value  : "",
+            save_set:           new FormData(document.getElementById("savePredictionForm")).get("save_set"),
+            lottery_id:         new FormData(document.getElementById("savePredictionForm")).get("lottery_id"),
+            draws_analyzed:     new FormData(document.getElementById("savePredictionForm")).get("draws_analyzed"),
+            run_uuid:           document.getElementById("saveRunUuid")           ? document.getElementById("saveRunUuid").value           : "",
+            client_result_hash: document.getElementById("saveClientResultHash") ? document.getElementById("saveClientResultHash").value  : "",
+            profile:            r.combo && r.combo.profile,
+            strategy:           r.combo && r.combo.strategy
+          });
+        } catch (_) {}
+
+        /* Step 4: send via FormData fetch and return the response Promise */
+        return submitSaveFormAjax();
+
+      }).then(function (response) {
+        try { console.log("BATCH SAVE RESPONSE", response); } catch (_) {}
+        if (response && response.success) {
+          batchResults[idx].saved   = true;
+          batchResults[idx].savedId = response.saved_id || 0;
+          renderCompletedCell(idx, true);
+        } else {
+          var errMsg = (response && response.message) ? response.message : "Save failed.";
+          batchResults[idx].saveError = errMsg;
+          renderCompletedCell(idx, false, errMsg);
+        }
+        try { persistResults(); } catch (_) {}
+        setBatchSaveNote("Saved " + currentSaveNum + " of " + totalCount + "...", "success");
+        setTimeout(function () {
+          saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
+        }, 800);
+      }).catch(function (err) {
+        var errMsg = err && err.message ? err.message : "Save error.";
+        try { console.log("BATCH SAVE ERROR", errMsg); } catch (_) {}
+        batchResults[idx].saveError = errMsg;
+        renderCompletedCell(idx, false, errMsg);
+        try { persistResults(); } catch (_) {}
+        setTimeout(function () {
+          saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
+        }, 800);
+      });
+    } else {
+      /* Fallback when integrity function not yet loaded: dispatch form submit event
+         (reference-file approach) and proceed after 2.5-second delay */
       var ev = document.createEvent("Event");
       ev.initEvent("submit", true, true);
       form.dispatchEvent(ev);
-
       setTimeout(function () {
         saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
-      }, 2500); /* 2.5-second delay between sequential saves */
-    }
-
-    if (typeof window.skaiPrepareClientIntegrity === "function") {
-      window.skaiPrepareClientIntegrity().then(submitPreparedBatchSave).catch(function () {
-        if (window.skaiShowSaveToast) {
-          window.skaiShowSaveToast("Could not prepare secure save for this batch run.", "error");
-        }
-        setTimeout(function () {
-          saveAllSequential(rest, doneCallback, currentSaveNum, totalCount);
-        }, 1200);
-      });
-    } else {
-      submitPreparedBatchSave();
+      }, 2500);
     }
   }
 
