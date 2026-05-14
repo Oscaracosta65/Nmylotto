@@ -6650,7 +6650,6 @@ document.addEventListener('DOMContentLoaded', function () {
           if (limitExtra && extra.length >= limitExtra) { break; }
         } else if (main.indexOf(n) === -1) {
           main.push(n);
-          if (limitMain && main.length >= limitMain) { /* keep scanning for extras */ }
         }
       }
     } catch (_) {}
