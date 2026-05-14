@@ -6697,7 +6697,9 @@ document.addEventListener('DOMContentLoaded', function () {
       return Promise.resolve({ success: false, message: "Not saved - missing lottery_id." });
     }
 
-    if (!fd.get("draws_analyzed") && fd.get("draws_analyzed") !== "0") {
+    /* draws_analyzed is acceptable as "0" (PHP handler accepts 0 as a sentinel);
+       only block when the field is entirely absent from the form. */
+    if (fd.get("draws_analyzed") === null) {
       return Promise.resolve({ success: false, message: "Not saved - missing draws_analyzed." });
     }
 
@@ -6711,7 +6713,7 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
           return JSON.parse(text);
         } catch (e) {
-          return { success: false, message: "Save returned non-JSON response: " + text.substring(0, 500) };
+          return { success: false, message: "Save returned non-JSON response (parse error)." };
         }
       });
     }).catch(function (err) {
