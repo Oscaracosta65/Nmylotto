@@ -6265,6 +6265,7 @@ document.addEventListener('DOMContentLoaded', function () {
        * - Those buttons write each captured run into the normal save form and submit it.
        */
       var verified = !!hasValidNumbers;
+      var needsNumberRecovery = !verified;
 
       /* Capture current settings and JSON metadata at run-completion time so each
          batch result carries its own snapshot (not overwritten by subsequent runs). */
@@ -6291,8 +6292,9 @@ document.addEventListener('DOMContentLoaded', function () {
         combo: combo,
         html: res.html,
         text: res.text,
-        done: verified,
+        done: true,
         verified: verified,
+        needsNumberRecovery: needsNumberRecovery,
         completionSignalOk: completionSignalOk,
         saveProof: hasValidNumbers
           ? (completionSignalOk ? "numbers_and_completion_events" : "valid_number_capture")
@@ -6316,13 +6318,13 @@ document.addEventListener('DOMContentLoaded', function () {
       batchDoneCount += 1;
       updateProgress();
 
-      if (verified) {
-        setCell(combo.profile, combo.strategy, buildBatchCellNode(idx, "Complete", "#16a34a", true), "done");
-        setCurrentLabel(combo.label + " complete. Continuing batch...");
-      } else {
-        setCell(combo.profile, combo.strategy, "Complete - save check needed", "warning");
-        setCurrentLabel(combo.label + " finished, but Core AI did not expose numbers to the batch snapshot. Continuing...");
-      }
+      setCell(
+        combo.profile,
+        combo.strategy,
+        buildBatchCellNode(idx, verified ? "Complete" : "Complete - recover on save", "#16a34a", true),
+        "done"
+      );
+      setCurrentLabel(combo.label + (verified ? " complete. Continuing batch..." : " complete (numbers will recover on save). Continuing batch..."));
 
       setTimeout(runNext, AUTO_SAVE_DELAY_MS);
     });
@@ -6585,6 +6587,110 @@ document.addEventListener('DOMContentLoaded', function () {
 
   /* v15: direct/post batch auto-save helpers removed. Save All 9 now uses the reference-file normal form-submit flow. */
 
+  function coreAiParseUniquePositiveInts(values, limit) {
+    var out = [];
+    for (var i = 0; i < values.length; i++) {
+      var n = parseInt(values[i], 10);
+      if (n > 0 && out.indexOf(n) === -1) { out.push(n); }
+      if (limit && out.length >= limit) { break; }
+    }
+    return out;
+  }
+
+  function coreAiNumbersFromAnyJson(raw, limit) {
+    if (!raw) { return []; }
+    try {
+      var parsed = JSON.parse(String(raw));
+      var vals = [];
+      if (Array.isArray(parsed)) {
+        for (var i = 0; i < parsed.length; i++) {
+          var item = parsed[i];
+          if (typeof item === "number" || typeof item === "string") {
+            vals.push(item);
+          } else if (item && typeof item === "object") {
+            vals.push(item.number);
+            vals.push(item.value);
+            vals.push(item.num);
+          }
+        }
+      } else if (parsed && typeof parsed === "object") {
+        if (Array.isArray(parsed.mainNumbers)) {
+          return coreAiParseUniquePositiveInts(parsed.mainNumbers, limit);
+        }
+        if (Array.isArray(parsed.numbers)) {
+          return coreAiParseUniquePositiveInts(parsed.numbers, limit);
+        }
+      }
+      return coreAiParseUniquePositiveInts(vals, limit);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function coreAiNumbersFromCsv(raw, limit) {
+    if (!raw) { return []; }
+    var parts = String(raw).split(",");
+    return coreAiParseUniquePositiveInts(parts, limit);
+  }
+
+  function coreAiNumbersFromResultHtml(rawHtml, limitMain, limitExtra) {
+    var main = [], extra = [];
+    try {
+      if (!rawHtml) { return { mainNumbers: main, extraNumbers: extra }; }
+      var doc = document.createElement("div");
+      doc.innerHTML = String(rawHtml);
+      var balls = doc.querySelectorAll(".number-ball, .skai-number-ball, .skai-pick, [class*='ball'], [class*='pick-number']");
+      for (var i = 0; i < balls.length; i++) {
+        var txt = String(balls[i].textContent || balls[i].innerText || "").replace(/[^0-9]/g, "");
+        var n = parseInt(txt, 10);
+        if (!n || n <= 0) { continue; }
+        var cls = String(balls[i].className || "").toLowerCase();
+        if (cls.indexOf("powerball") >= 0 || cls.indexOf("extra") >= 0) {
+          if (extra.indexOf(n) === -1) { extra.push(n); }
+          if (limitExtra && extra.length >= limitExtra) { break; }
+        } else if (main.indexOf(n) === -1) {
+          main.push(n);
+          if (limitMain && main.length >= limitMain) { /* keep scanning for extras */ }
+        }
+      }
+    } catch (_) {}
+    return { mainNumbers: coreAiParseUniquePositiveInts(main, limitMain), extraNumbers: coreAiParseUniquePositiveInts(extra, limitExtra) };
+  }
+
+  function coreAiRecoverNumbersForSaveResult(r) {
+    var main = Array.isArray(r && r.mainNumbers) ? coreAiParseUniquePositiveInts(r.mainNumbers, REQUIRED_MAIN_COUNT) : [];
+    var extra = Array.isArray(r && r.extraNumbers) ? coreAiParseUniquePositiveInts(r.extraNumbers, 5) : [];
+
+    if (main.length < REQUIRED_MAIN_COUNT) {
+      main = coreAiNumbersFromAnyJson(r && r.rankedMainNumbersJson, REQUIRED_MAIN_COUNT);
+    }
+    if (!extra.length) {
+      extra = coreAiNumbersFromAnyJson(r && r.rankedExtraNumbersJson, 5);
+    }
+    if (main.length < REQUIRED_MAIN_COUNT) {
+      main = coreAiNumbersFromAnyJson(r && r.mainDisplayJson, REQUIRED_MAIN_COUNT);
+    }
+    if (!extra.length) {
+      extra = coreAiNumbersFromAnyJson(r && r.extraDisplayJson, 5);
+    }
+    if (main.length < REQUIRED_MAIN_COUNT) {
+      var fromHtml = coreAiNumbersFromResultHtml(r && r.html, REQUIRED_MAIN_COUNT, 5);
+      if (fromHtml.mainNumbers.length >= REQUIRED_MAIN_COUNT) { main = fromHtml.mainNumbers; }
+      if (!extra.length && fromHtml.extraNumbers.length) { extra = fromHtml.extraNumbers; }
+    }
+    if (main.length < REQUIRED_MAIN_COUNT) {
+      var hiddenMain = document.getElementById("saveMainNumbers");
+      var fromHiddenMain = coreAiNumbersFromCsv(hiddenMain ? hiddenMain.value : "", REQUIRED_MAIN_COUNT);
+      if (fromHiddenMain.length >= REQUIRED_MAIN_COUNT) { main = fromHiddenMain; }
+    }
+    if (!extra.length) {
+      var hiddenExtra = document.getElementById("saveExtraBallNumbers");
+      var fromHiddenExtra = coreAiNumbersFromCsv(hiddenExtra ? hiddenExtra.value : "", 5);
+      if (fromHiddenExtra.length) { extra = fromHiddenExtra; }
+    }
+    return { mainNumbers: main, extraNumbers: extra };
+  }
+
   /*
    * applyBatchResultToSaveForm
    * Copies a completed batch result's numbers and settings into the normal
@@ -6602,11 +6708,22 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (!r || !r.combo) { return; }
 
-    /* Numbers */
-    window.skaiSaveMainOrdered  = r.mainNumbers ? r.mainNumbers.slice() : [];
-    window.skaiSaveExtraOrdered = r.extraNumbers ? r.extraNumbers.slice() : [];
-    setf("saveMainNumbers",       r.mainNumbers  ? r.mainNumbers.join(",")  : "");
-    setf("saveExtraBallNumbers",  r.extraNumbers ? r.extraNumbers.join(",") : "");
+    /* Numbers (with save-time recovery for runs that captured late) */
+    var recovered = coreAiRecoverNumbersForSaveResult(r);
+    var mainToSave = recovered.mainNumbers || [];
+    var extraToSave = recovered.extraNumbers || [];
+    if (mainToSave.length >= REQUIRED_MAIN_COUNT) {
+      r.mainNumbers = mainToSave.slice();
+      r.verified = true;
+      r.needsNumberRecovery = false;
+    } else {
+      r.needsNumberRecovery = true;
+    }
+    if (extraToSave.length) { r.extraNumbers = extraToSave.slice(); }
+    window.skaiSaveMainOrdered  = mainToSave.slice();
+    window.skaiSaveExtraOrdered = extraToSave.slice();
+    setf("saveMainNumbers",      mainToSave.join(","));
+    setf("saveExtraBallNumbers", extraToSave.join(","));
 
     /* Timestamp */
     setf("saveGeneratedAt", r.generatedAt || (new Date()).toISOString().replace("T", " ").substring(0, 19));
